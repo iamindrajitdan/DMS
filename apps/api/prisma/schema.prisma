@@ -1,0 +1,216 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  domain    String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  teams               Team[]
+  roles               Role[]
+  permissions         Permission[]
+  // More relations to come for documents, workflows, etc.
+  folders             Folder[]
+  documentTypes       DocumentType[]
+  documents           Document[]
+  metadataDefinitions MetadataDefinition[]
+}
+
+model User {
+  id             String       @id @default(uuid())
+  email          String       @unique
+  passwordHash   String
+  firstName      String
+  lastName       String
+  isActive       Boolean      @default(true)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  roles            UserRole[]
+  teams            TeamMember[]
+  documents        Document[]
+  documentVersions DocumentVersion[]
+}
+
+model Role {
+  id             String       @id @default(uuid())
+  name           String // e.g. SUPER_ADMIN, ORG_ADMIN, MANAGER, EDITOR, VIEWER
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@unique([name, organizationId])
+}
+
+model Permission {
+  id             String       @id @default(uuid())
+  action         String // e.g. document.create, document.read
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  roles RolePermission[]
+
+  @@unique([action, organizationId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model Team {
+  id             String       @id @default(uuid())
+  name           String
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  members TeamMember[]
+}
+
+model TeamMember {
+  teamId String
+  userId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, userId])
+}
+
+model Folder {
+  id             String       @id @default(uuid())
+  name           String
+  parentId       String?
+  parent         Folder?      @relation("FolderToFolder", fields: [parentId], references: [id])
+  children       Folder[]     @relation("FolderToFolder")
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  documents Document[]
+}
+
+model DocumentType {
+  id             String       @id @default(uuid())
+  name           String // e.g. Contract, Invoice, SOP
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  documents           Document[]
+  metadataDefinitions MetadataDefinition[]
+
+  @@unique([name, organizationId])
+}
+
+model Document {
+  id             String       @id @default(uuid())
+  title          String
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  ownerId        String
+  owner          User         @relation(fields: [ownerId], references: [id])
+  folderId       String?
+  folder         Folder?      @relation(fields: [folderId], references: [id])
+  documentTypeId String
+  documentType   DocumentType @relation(fields: [documentTypeId], references: [id])
+
+  status     String    @default("ACTIVE") // ACTIVE, ARCHIVED, DELETED
+  isDeleted  Boolean   @default(false)
+  deletedAt  DateTime?
+  archivedAt DateTime?
+
+  // The latest physical file attributes for quick access (cached from latest version)
+  currentVersionId String?          @unique
+  currentVersion   DocumentVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions DocumentVersion[]  @relation("DocumentVersions")
+  metadata DocumentMetadata[]
+}
+
+model DocumentVersion {
+  id            String   @id @default(uuid())
+  documentId    String
+  document      Document @relation("DocumentVersions", fields: [documentId], references: [id])
+  versionNumber Int
+  storageKey    String // Key in S3/MinIO
+  mimeType      String
+  fileSize      Int
+  checksum      String
+  changeComment String?
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+
+  // Reverse relation for the Document's current version
+  currentForDocument Document? @relation("CurrentVersion")
+
+  @@unique([documentId, versionNumber])
+}
+
+model MetadataDefinition {
+  id             String       @id @default(uuid())
+  name           String // Internal identifier e.g. contract_number
+  label          String // Display name e.g. "Contract Number"
+  type           String // TEXT, NUMBER, DATE, SELECT, USER
+  required       Boolean      @default(false)
+  options        String? // JSON string for SELECT options
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  documentTypeId String
+  documentType   DocumentType @relation(fields: [documentTypeId], references: [id])
+
+  values DocumentMetadata[]
+}
+
+model DocumentMetadata {
+  id                   String             @id @default(uuid())
+  documentId           String
+  document             Document           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  metadataDefinitionId String
+  metadataDefinition   MetadataDefinition @relation(fields: [metadataDefinitionId], references: [id], onDelete: Cascade)
+
+  // EAV approach: store value as string and cast based on definition type
+  value String
+
+  @@unique([documentId, metadataDefinitionId])
+}
